@@ -1,0 +1,67 @@
+# ===============================
+# SMILES → 3D構造 → 3D記述子自動生成コード
+# ===============================
+
+from rdkit import Chem
+from rdkit.Chem import AllChem
+from mordred import Calculator, descriptors
+import pandas as pd
+from tqdm import tqdm
+
+# --- 入力データ（例：複数分子のSMILES） ---
+smiles_list = [
+    "CCO",        # エタノール
+    "CC(=O)O",    # 酢酸
+    "c1ccccc1",   # ベンゼン
+]
+
+# --- Mordred 計算器（3D記述子を含む） ---
+calc = Calculator(descriptors, ignore_3D=False)
+
+# --- 結果を格納するリスト ---
+results = []
+
+# --- 各SMILESについて処理 ---
+for smi in tqdm(smiles_list, desc="Calculating 3D descriptors"):
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        print(f"[Warning] Invalid SMILES: {smi}")
+        continue
+
+    # 水素付加
+    mol = Chem.AddHs(mol)
+
+    # --- 3D構造生成 ---
+    status = AllChem.EmbedMolecule(mol, randomSeed=42)
+    if status != 0:
+        print(f"[Warning] 3D embedding failed for: {smi}")
+        continue
+
+    # --- 構造最適化（MM: UFF or MMFF94） ---
+    try:
+        # UFFまたはMMFFで構造最適化
+        if AllChem.MMFFHasAllMoleculeParams(mol):
+            AllChem.MMFFOptimizeMolecule(mol)  # MMFF94
+        else:
+            AllChem.UFFOptimizeMolecule(mol)   # UFF fallback
+    except Exception as e:
+        print(f"[Warning] Optimization failed for {smi}: {e}")
+        continue
+
+    # --- Mordred記述子計算 ---
+    try:
+        desc = calc(mol)
+        desc_dict = desc.asdict()
+        desc_dict["SMILES"] = smi
+        results.append(desc_dict)
+    except Exception as e:
+        print(f"[Warning] Descriptor calc failed for {smi}: {e}")
+
+# --- DataFrameに変換 ---
+df_desc = pd.DataFrame(results)
+
+# --- 結果を表示・保存 ---
+print(f"✅ 記述子数: {df_desc.shape[1]-1}")
+print(f"✅ 分子数: {df_desc.shape[0]}")
+df_desc.to_csv("mordred_3D_descriptors.csv", index=False)
+print("💾 'mordred_3D_descriptors.csv' に保存しました。")
